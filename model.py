@@ -67,7 +67,7 @@ TOWER_NAME = 'tower'
 
 FLAGS = tf.app.flags.FLAGS
 
-tf.app.flags.DEFINE_string('checkpoint_dir', './checkpoints',
+tf.app.flags.DEFINE_string('checkpoint_dir', './checkpoints/pid_%08d' % os.getpid(),
                            """Directory where to write event logs """
                            """and checkpoint.""")
 tf.app.flags.DEFINE_integer('max_steps', 10000,
@@ -93,11 +93,7 @@ def main(argv=None):  # pylint: disable=unused-argument
    file_list = glob.glob('/Users/jchilders/workdir/ml/output/*.npz')
    fileGenerator = file_gen.FileGenerator(file_list,NUM_CLASSES,batch_size=FLAGS.batch_size)
 
-   # Variables that affect learning rate.
-   num_batches_per_epoch = NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN / FLAGS.batch_size
-   decay_steps = int(num_batches_per_epoch * NUM_EPOCHS_PER_DECAY)
-
-   tf.logging.info('decay_steps = %s',decay_steps)
+   
 
    """Train CIFAR-10 for a number of steps."""
    with tf.Graph().as_default():
@@ -361,13 +357,26 @@ def train(total_loss, global_step):
    # Variables that affect learning rate.
    num_batches_per_epoch = NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN / FLAGS.batch_size
    decay_steps = int(num_batches_per_epoch * NUM_EPOCHS_PER_DECAY)
-
+   staircase = False
    # Decay the learning rate exponentially based on the number of steps.
+   '''
+   tf.logging.info('initial learning rate:      %s',INITIAL_LEARNING_RATE)
+   tf.logging.info('decay steps:                %s',decay_steps)
+   tf.logging.info('learning rate decay factor: %s',LEARNING_RATE_DECAY_FACTOR)
+   tf.logging.info('staircase:                  %s',staircase)
+   tf.logging.info('using exponential_decay')
    lr = tf.train.exponential_decay(INITIAL_LEARNING_RATE,
                                   global_step,
                                   decay_steps,
                                   LEARNING_RATE_DECAY_FACTOR,
-                                  staircase=False)
+                                  staircase=staircase)'''
+
+   boundaries  = [1000,2000,3000,4000,5000,6000,7000,8000,9000,10000]
+   values      = [0.15,0.125,0.1,0.075,0.05,0.025,0.01,0.0075,0.005,0.0025,0.001]
+   tf.logging.info('boundaries:     %s',boundaries)
+   tf.logging.info('values:         %s',values)
+   tf.logging.info('using piecewise_constant')
+   lr = tf.train.piecewise_constant(global_step,boundaries,values)
    tf.summary.scalar('learning_rate', lr)
 
    # Generate moving averages of all losses and associated summaries.
