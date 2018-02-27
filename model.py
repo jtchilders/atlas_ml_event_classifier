@@ -136,9 +136,9 @@ def main(argv=None):  # pylint: disable=unused-argument
 
       # Add precision summary
       #summary_train_prec = tf.placeholder(tf.float32)
-      #summary_eval_prec  = tf.placeholder(tf.float32)
+      summary_eval_prec  = tf.placeholder(tf.float32)
       #tf.summary.scalar('precision/train', summary_train_prec)
-      #tf.summary.scalar('precision/eval',  summary_eval_prec)
+      tf.summary.scalar('precision_eval',  summary_eval_prec)
 
       saver = tf.train.Saver(max_to_keep=None)
 
@@ -173,8 +173,9 @@ def main(argv=None):  # pylint: disable=unused-argument
                                   examples_per_sec, sec_per_batch))
 
 
+      
       with tf.train.MonitoredTrainingSession(
-         save_summaries_secs=100,
+         save_summaries_secs=120,
          checkpoint_dir=FLAGS.checkpoint_dir,
          hooks=[tf.train.StopAtStepHook(last_step=FLAGS.max_steps),
                 tf.train.CheckpointSaverHook(saver=saver,checkpoint_dir=FLAGS.checkpoint_dir,save_steps=100),
@@ -184,15 +185,16 @@ def main(argv=None):  # pylint: disable=unused-argument
             log_device_placement=FLAGS.log_device_placement),
          save_checkpoint_secs=None) as mon_sess:
 
+         prec_eval = 0.
          while not mon_sess.should_stop():
             # here update data batch
             local_train_images,local_train_labels = trainingFileGenerator.next()
-
-            _,gs = mon_sess.run([train_op,global_step],feed_dict={train_images:local_train_images,train_labels:local_train_labels})
+            #tf.logging.info('prec_eval: %s',prec_eval)
+            _,gs = mon_sess.run([train_op,global_step],feed_dict={train_images:local_train_images,train_labels:local_train_labels,summary_eval_prec:prec_eval})
 
             #tf.logging.info('gs = %s',gs)
             if gs % 100 == 0:
-               prec_eval  = evaluate_set (mon_sess, top_k, EVAL_NUM_EXAMPLES,evalFileGenerator,train_images,train_labels)
+               prec_eval  = evaluate_set (mon_sess, top_k, EVAL_NUM_EXAMPLES,evalFileGenerator,train_images,train_labels,summary_eval_prec,prec_eval)
                tf.logging.info('precision evalution: %5.2f',prec_eval)
             
 
@@ -453,7 +455,7 @@ def train(total_loss, global_step):
 
    return train_op
 
-def evaluate_set (sess, top_k_op,num_examples,generator,train_images,train_labels):
+def evaluate_set (sess, top_k_op,num_examples,generator,train_images,train_labels,summary_eval_prec,prec_eval):
    """Convenience function to run evaluation for for every batch. 
      Sum the number of correct predictions and output one precision value.
    Args:
@@ -463,10 +465,9 @@ def evaluate_set (sess, top_k_op,num_examples,generator,train_images,train_label
    num_iter = int(np.ceil(num_examples / FLAGS.batch_size))
    true_count = 0  # Counts the number of correct predictions.
    total_sample_count = num_iter * FLAGS.batch_size
-
    for step in xrange(num_iter):
       images,labels = generator.next()
-      predictions = sess.run([top_k_op],feed_dict={train_images:images,train_labels:labels})
+      predictions = sess.run([top_k_op],feed_dict={train_images:images,train_labels:labels,summary_eval_prec:prec_eval})
       true_count += np.sum(predictions)
 
    # Compute precision
