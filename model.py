@@ -112,14 +112,18 @@ def main(argv=None):  # pylint: disable=unused-argument
       # Force input pipeline to CPU:0 to avoid operations sometimes ending up on
       # GPU and resulting in a slow down.
       with tf.device('/cpu:0'):
-         train_images, train_labels = trainingFileGenerator.next()
-         eval_images, eval_labels = evalFileGenerator.next()
+         train_images = tf.placeholder(tf.float32,(FLAGS.batch_size,60,64,2))
+         train_labels = tf.placeholder(tf.float32,(FLAGS.batch_size))
+         #eval_images = tf.placeholder(tf.float32,(None,60,64,2))
+         #eval_labels = tf.placeholder(tf.float32,(None,3))
+         #train_images, train_labels = trainingFileGenerator.next()
+         #eval_images, eval_labels = evalFileGenerator.next()
 
 
       # Build a Graph that computes the logits predictions from the
       # inference model.
       logits = inference(train_images)
-      eval_logits = inference(eval_images,True)
+      #eval_logits = inference(eval_images,True)
 
       tf.logging.info(' %s %s',train_labels.shape,logits.shape)
 
@@ -128,11 +132,11 @@ def main(argv=None):  # pylint: disable=unused-argument
 
       # For evaluation
       top_k      = tf.nn.in_top_k (logits,      tf.cast(train_labels, tf.int32),     1)
-      top_k_eval = tf.nn.in_top_k (eval_logits, tf.cast(eval_labels, tf.int32),      1) 
+      #top_k_eval = tf.nn.in_top_k (eval_logits, tf.cast(eval_labels, tf.int32),      1) 
 
       # Add precision summary
-      summary_train_prec = tf.placeholder(tf.float32)
-      summary_eval_prec  = tf.placeholder(tf.float32)
+      #summary_train_prec = tf.placeholder(tf.float32)
+      #summary_eval_prec  = tf.placeholder(tf.float32)
       #tf.summary.scalar('precision/train', summary_train_prec)
       #tf.summary.scalar('precision/eval',  summary_eval_prec)
 
@@ -162,24 +166,15 @@ def main(argv=None):  # pylint: disable=unused-argument
                loss_value = run_values.results
                examples_per_sec = FLAGS.log_frequency * FLAGS.batch_size / duration
                sec_per_batch = float(duration / FLAGS.log_frequency)
-
-               #prec_train = evaluate_set (run_context, top_k,      EVAL_NUM_EXAMPLES)
-               #prec_eval  = evaluate_set (run_context, top_k_eval, EVAL_NUM_EXAMPLES)
-
-               #summary_str = run_context.run(summary_op, feed_dict={summary_train_prec: prec_train,
-               #                                   summary_eval_prec:  prec_eval})
-               #summary_writer.add_summary(summary_str, step)
                
                format_str = ('%s: step %d, loss = %.2f(%.1f examples/sec; %.3f '
                            'sec/batch)')
                tf.logging.info(format_str % (datetime.now(), self._step, loss_value,
                                   examples_per_sec, sec_per_batch))
 
-               #print('%s: precision train = %.3f' % (datetime.now(), prec_train))
-               #print('%s: precision eval  = %.3f' % (datetime.now(), prec_eval))
-
 
       with tf.train.MonitoredTrainingSession(
+         save_summaries_secs=100,
          checkpoint_dir=FLAGS.checkpoint_dir,
          hooks=[tf.train.StopAtStepHook(last_step=FLAGS.max_steps),
                 tf.train.CheckpointSaverHook(saver=saver,checkpoint_dir=FLAGS.checkpoint_dir,save_steps=100),
@@ -190,14 +185,15 @@ def main(argv=None):  # pylint: disable=unused-argument
          save_checkpoint_secs=None) as mon_sess:
 
          while not mon_sess.should_stop():
-            _,gs = mon_sess.run([train_op,global_step])
-            tf.logging.info('gs = %s',gs)
-            if gs % 10:
+            # here update data batch
+            local_train_images,local_train_labels = trainingFileGenerator.next()
 
-               prec_train = evaluate_set (mon_sess, top_k,      EVAL_NUM_EXAMPLES)
-               tf.logging.info('prec_train: %s',prec_train)
-               prec_eval  = evaluate_set (mon_sess, top_k_eval, EVAL_NUM_EXAMPLES)
-               tf.logging.info('prec_eval: %s',prec_eval)
+            _,gs = mon_sess.run([train_op,global_step],feed_dict={train_images:local_train_images,train_labels:local_train_labels})
+
+            #tf.logging.info('gs = %s',gs)
+            if gs % 100 == 0:
+               prec_eval  = evaluate_set (mon_sess, top_k, EVAL_NUM_EXAMPLES,evalFileGenerator,train_images,train_labels)
+               tf.logging.info('precision evalution: %5.2f',prec_eval)
             
 
 def inference(images, reuse = False):
@@ -457,20 +453,20 @@ def train(total_loss, global_step):
 
    return train_op
 
-def evaluate_set (sess, top_k_op, num_examples):
+def evaluate_set (sess, top_k_op,num_examples,generator,train_images,train_labels):
    """Convenience function to run evaluation for for every batch. 
      Sum the number of correct predictions and output one precision value.
    Args:
     sess:          current Session
     top_k_op:      tensor of type tf.nn.in_top_k
-    num_examples:  number of examples to evaluate
    """
    num_iter = int(np.ceil(num_examples / FLAGS.batch_size))
    true_count = 0  # Counts the number of correct predictions.
    total_sample_count = num_iter * FLAGS.batch_size
 
    for step in xrange(num_iter):
-      predictions = sess.run([top_k_op])
+      images,labels = generator.next()
+      predictions = sess.run([top_k_op],feed_dict={train_images:images,train_labels:labels})
       true_count += np.sum(predictions)
 
    # Compute precision
