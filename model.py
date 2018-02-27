@@ -39,7 +39,7 @@ import re
 import sys
 
 import tensorflow as tf
-import file_gen,glob
+import file_gen,glob,numpy as np
 
 
 FILES = 353
@@ -47,7 +47,7 @@ EXAMPLES_PER_FILE = 1000
 TOTAL_NUMBER_OF_EXAMPLES = FILES * EXAMPLES_PER_FILE
 NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN = TOTAL_NUMBER_OF_EXAMPLES * 0.8
 NUM_EXAMPLES_PER_EPOCH_FOR_EVAL  = TOTAL_NUMBER_OF_EXAMPLES * 0.2
-
+EVAL_NUM_EXAMPLES = 1000
 
 
 # Constants describing the training process.
@@ -78,10 +78,16 @@ tf.app.flags.DEFINE_integer('log_frequency', 10,
                             """How often to log results to the console.""")
 tf.app.flags.DEFINE_integer('batch_size', 128,
                             """Number of images to process in a batch.""")
-tf.app.flags.DEFINE_string('data_dir', './cifar10_data',
-                           """Path to the CIFAR-10 data directory.""")
 tf.app.flags.DEFINE_boolean('use_fp16', False,
                             """Train the model using fp16.""")
+tf.app.flags.DEFINE_integer('starting_boundary',1000,"""Boundary start for piecewise learning rate function""")
+tf.app.flags.DEFINE_integer('boundary_increment',1000,"""Boundary increment for piecewise learning rate function (starting_boundary + i * boundary_increment)""")
+tf.app.flags.DEFINE_float('starting_value',0.5,"""starting value, learning rate before first boundary""")
+tf.app.flags.DEFINE_float('value_scaler',0.5,"""value will be scaled by this value at each boundary (last_value * value_scaler) """)
+tf.app.flags.DEFINE_integer('n_boundaries',10,"""number of boundaries""")
+tf.app.flags.DEFINE_string('training_data_path','/Users/jchilders/workdir/ml/training_data/','path to input npz files for training')
+tf.app.flags.DEFINE_string('eval_data_path','/Users/jchilders/workdir/ml/eval_data/','path to input npz files for eval testing')
+
 
 
 def main(argv=None):  # pylint: disable=unused-argument
@@ -90,32 +96,47 @@ def main(argv=None):  # pylint: disable=unused-argument
       tf.gfile.DeleteRecursively(FLAGS.checkpoint_dir)
    tf.gfile.MakeDirs(FLAGS.checkpoint_dir)
 
-   file_list = glob.glob('/Users/jchilders/workdir/ml/output/*.npz')
-   fileGenerator = file_gen.FileGenerator(file_list,NUM_CLASSES,batch_size=FLAGS.batch_size)
+   training_file_list = glob.glob(FLAGS.training_data_path + '/*.npz')
+   trainingFileGenerator = file_gen.FileGenerator(training_file_list,NUM_CLASSES,batch_size=FLAGS.batch_size)
 
+   eval_file_list = glob.glob(FLAGS.eval_data_path + '/*.npz')
+   evalFileGenerator = file_gen.FileGenerator(eval_file_list,NUM_CLASSES,batch_size=FLAGS.batch_size)
    
+
 
    """Train CIFAR-10 for a number of steps."""
    with tf.Graph().as_default():
-
       global_step = tf.train.get_or_create_global_step()
 
       # Get images and labels for CIFAR-10.
       # Force input pipeline to CPU:0 to avoid operations sometimes ending up on
       # GPU and resulting in a slow down.
       with tf.device('/cpu:0'):
-         images, labels = fileGenerator.next()
+         train_images, train_labels = trainingFileGenerator.next()
+         eval_images, eval_labels = evalFileGenerator.next()
+
 
       # Build a Graph that computes the logits predictions from the
       # inference model.
-      logits = inference(images)
+      logits = inference(train_images)
+      eval_logits = inference(eval_images,True)
 
-      tf.logging.info(' %s %s',labels.shape,logits.shape)
+      tf.logging.info(' %s %s',train_labels.shape,logits.shape)
 
       # Calculate loss.
-      loss = losscalc(logits, labels)
+      loss = losscalc(logits, train_labels)
 
-      saver = tf.train.Saver(max_to_keep=0)
+      # For evaluation
+      top_k      = tf.nn.in_top_k (logits,      tf.cast(train_labels, tf.int32),     1)
+      top_k_eval = tf.nn.in_top_k (eval_logits, tf.cast(eval_labels, tf.int32),      1) 
+
+      # Add precision summary
+      summary_train_prec = tf.placeholder(tf.float32)
+      summary_eval_prec  = tf.placeholder(tf.float32)
+      #tf.summary.scalar('precision/train', summary_train_prec)
+      #tf.summary.scalar('precision/eval',  summary_eval_prec)
+
+      saver = tf.train.Saver(max_to_keep=None)
 
       # Build a Graph that trains the model with one batch of examples and
       # updates the model parameters.
@@ -142,23 +163,44 @@ def main(argv=None):  # pylint: disable=unused-argument
                examples_per_sec = FLAGS.log_frequency * FLAGS.batch_size / duration
                sec_per_batch = float(duration / FLAGS.log_frequency)
 
-               format_str = ('%s: step %d, loss = %.2f (%.1f examples/sec; %.3f '
+               #prec_train = evaluate_set (run_context, top_k,      EVAL_NUM_EXAMPLES)
+               #prec_eval  = evaluate_set (run_context, top_k_eval, EVAL_NUM_EXAMPLES)
+
+               #summary_str = run_context.run(summary_op, feed_dict={summary_train_prec: prec_train,
+               #                                   summary_eval_prec:  prec_eval})
+               #summary_writer.add_summary(summary_str, step)
+               
+               format_str = ('%s: step %d, loss = %.2f(%.1f examples/sec; %.3f '
                            'sec/batch)')
-               print (format_str % (datetime.now(), self._step, loss_value,
+               tf.logging.info(format_str % (datetime.now(), self._step, loss_value,
                                   examples_per_sec, sec_per_batch))
+
+               #print('%s: precision train = %.3f' % (datetime.now(), prec_train))
+               #print('%s: precision eval  = %.3f' % (datetime.now(), prec_eval))
+
 
       with tf.train.MonitoredTrainingSession(
          checkpoint_dir=FLAGS.checkpoint_dir,
          hooks=[tf.train.StopAtStepHook(last_step=FLAGS.max_steps),
-               tf.train.NanTensorHook(loss),
-               _LoggerHook()],
+                tf.train.CheckpointSaverHook(saver=saver,checkpoint_dir=FLAGS.checkpoint_dir,save_steps=100),
+                tf.train.NanTensorHook(loss),
+                _LoggerHook()],
          config=tf.ConfigProto(
-            log_device_placement=FLAGS.log_device_placement)) as mon_sess:
+            log_device_placement=FLAGS.log_device_placement),
+         save_checkpoint_secs=None) as mon_sess:
 
          while not mon_sess.should_stop():
-            mon_sess.run(train_op)
+            _,gs = mon_sess.run([train_op,global_step])
+            tf.logging.info('gs = %s',gs)
+            if gs % 10:
 
-def inference(images):
+               prec_train = evaluate_set (mon_sess, top_k,      EVAL_NUM_EXAMPLES)
+               tf.logging.info('prec_train: %s',prec_train)
+               prec_eval  = evaluate_set (mon_sess, top_k_eval, EVAL_NUM_EXAMPLES)
+               tf.logging.info('prec_eval: %s',prec_eval)
+            
+
+def inference(images, reuse = False):
    """Build the CIFAR-10 model.
    Args:
     images: Images returned from distorted_inputs() or inputs().
@@ -171,7 +213,7 @@ def inference(images):
    # by replacing all instances of tf.get_variable() with tf.Variable().
    #
    # conv1
-   with tf.variable_scope('conv1') as scope:
+   with tf.variable_scope('conv1',reuse=reuse) as scope:
       kernel = _variable_with_weight_decay('weights',
                                          shape=[5,5,2,64],
                                          stddev=5e-2,
@@ -190,7 +232,7 @@ def inference(images):
                     name='norm1')
 
    # conv2
-   with tf.variable_scope('conv2') as scope:
+   with tf.variable_scope('conv2',reuse=reuse) as scope:
       kernel = _variable_with_weight_decay('weights',
                                          shape=[5, 5, 64, 64],
                                          stddev=5e-2,
@@ -212,7 +254,7 @@ def inference(images):
                           name='pool2')
 
    # local3
-   with tf.variable_scope('local3') as scope:
+   with tf.variable_scope('local3',reuse=reuse) as scope:
       # Move everything into depth so we can perform a single matrix multiply.
       reshape = tf.reshape(pool2, [FLAGS.batch_size, -1])
       dim = reshape.get_shape()[1].value
@@ -223,7 +265,7 @@ def inference(images):
       _activation_summary(local3)
 
    # local4
-   with tf.variable_scope('local4') as scope:
+   with tf.variable_scope('local4',reuse=reuse) as scope:
       weights = _variable_with_weight_decay('weights', shape=[384, 192],
                                           stddev=0.04, wd=0.004)
       biases = _variable_on_cpu('biases', [192], tf.constant_initializer(0.1))
@@ -234,7 +276,7 @@ def inference(images):
    # We don't apply softmax here because
    # tf.nn.sparse_softmax_cross_entropy_with_logits accepts the unscaled logits
    # and performs the softmax internally for efficiency.
-   with tf.variable_scope('softmax_linear') as scope:
+   with tf.variable_scope('softmax_linear',reuse=reuse) as scope:
       weights = _variable_with_weight_decay('weights', [192, NUM_CLASSES],
                                           stddev=1/192.0, wd=None)
       biases = _variable_on_cpu('biases', [NUM_CLASSES],
@@ -371,8 +413,14 @@ def train(total_loss, global_step):
                                   LEARNING_RATE_DECAY_FACTOR,
                                   staircase=staircase)'''
 
-   boundaries  = [1000,2000,3000,4000,5000,6000,7000,8000,9000,10000]
-   values      = [0.15,0.125,0.1,0.075,0.05,0.025,0.01,0.0075,0.005,0.0025,0.001]
+   
+   boundaries = []
+   values = [FLAGS.starting_value]
+   for i in range(FLAGS.n_boundaries):
+      boundaries.append(FLAGS.starting_boundary + i*FLAGS.boundary_increment)
+      value = FLAGS.starting_value - i*FLAGS.value_scaler
+      values.append(values[-1]*FLAGS.value_scaler)
+   
    tf.logging.info('boundaries:     %s',boundaries)
    tf.logging.info('values:         %s',values)
    tf.logging.info('using piecewise_constant')
@@ -409,6 +457,24 @@ def train(total_loss, global_step):
 
    return train_op
 
+def evaluate_set (sess, top_k_op, num_examples):
+   """Convenience function to run evaluation for for every batch. 
+     Sum the number of correct predictions and output one precision value.
+   Args:
+    sess:          current Session
+    top_k_op:      tensor of type tf.nn.in_top_k
+    num_examples:  number of examples to evaluate
+   """
+   num_iter = int(np.ceil(num_examples / FLAGS.batch_size))
+   true_count = 0  # Counts the number of correct predictions.
+   total_sample_count = num_iter * FLAGS.batch_size
+
+   for step in xrange(num_iter):
+      predictions = sess.run([top_k_op])
+      true_count += np.sum(predictions)
+
+   # Compute precision
+   return true_count / total_sample_count
 
 if __name__ == '__main__':
    tf.app.run()
