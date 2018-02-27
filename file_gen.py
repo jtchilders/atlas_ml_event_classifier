@@ -141,6 +141,12 @@ class FileGenerator:
          if self.npfile is None:
             # increment file index
             self.file_index += 1
+            # check that we are not exceeding the number of files 
+            if self.file_index >= len(self.filelist):
+               # shuffle the files
+               random.shuffle(self.filelist)
+               # reset file index counter
+               self.file_index = 0
             # load file
             self.npfile = numpy.load(self.filelist[self.file_index])
             # exctract images and class
@@ -173,8 +179,8 @@ class FileGenerator:
       # convert to categorical
       #np_classes = keras.utils.to_categorical(np_classes,self.num_classes)
       #logger.debug(' classes shape: %s',np_classes.shape)
-      tf.logging.info('served %d images in %08.2f seconds',self.batch_size,time.clock() - start)
-      return tf.convert_to_tensor(np.rollaxis(np_images,1,4),dtype=tf.float32),tf.convert_to_tensor(np_classes,dtype=tf.float32)
+      #tf.logging.info('served %d images in %08.2f seconds',self.batch_size,time.clock() - start)
+      return np.rollaxis(np_images,1,4),np_classes
    
      
    def __len__(self):
