@@ -143,6 +143,7 @@ class FileGenerator:
             self.file_index += 1
             # check that we are not exceeding the number of files 
             if self.file_index >= len(self.filelist):
+               tf.logging.info('end epoch, resetting data generator')
                # shuffle the files
                random.shuffle(self.filelist)
                # reset file index counter
