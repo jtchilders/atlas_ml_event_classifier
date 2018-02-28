@@ -87,6 +87,7 @@ tf.app.flags.DEFINE_float('value_scaler',0.5,"""value will be scaled by this val
 tf.app.flags.DEFINE_integer('n_boundaries',10,"""number of boundaries""")
 tf.app.flags.DEFINE_string('training_data_path','/Users/jchilders/workdir/ml/training_data/','path to input npz files for training')
 tf.app.flags.DEFINE_string('eval_data_path','/Users/jchilders/workdir/ml/eval_data/','path to input npz files for eval testing')
+tf.app.flags.DEFINE_boolean('use_adam_opt',False,'Use the AdamOptimizer instead of GradientDescent')
 
 
 
@@ -430,7 +431,12 @@ def train(total_loss, global_step):
 
    # Compute gradients.
    with tf.control_dependencies([loss_averages_op]):
-      opt = tf.train.GradientDescentOptimizer(lr)
+      if FLAGS.use_adam_opt:
+         tf.logging.info('using adam optimizer')
+         opt = tf.train.AdamOptimizer()
+      else:
+         tf.logging.info('using gradient descent optimizer')
+         opt = tf.train.GradientDescentOptimizer(lr)
       grads = opt.compute_gradients(total_loss)
 
    # Apply gradients.
