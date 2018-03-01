@@ -141,11 +141,13 @@ def main(argv=None):  # pylint: disable=unused-argument
       #tf.summary.scalar('precision/train', summary_train_prec)
       tf.summary.scalar('precision_eval',  summary_eval_prec)
 
-      saver = tf.train.Saver(max_to_keep=None)
-
+      
       # Build a Graph that trains the model with one batch of examples and
       # updates the model parameters.
       train_op = train(loss, global_step)
+
+      saver = tf.train.Saver(max_to_keep=None)
+
 
       class _LoggerHook(tf.train.SessionRunHook):
          """Logs loss and runtime."""
